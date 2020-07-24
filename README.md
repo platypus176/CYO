@@ -1,4 +1,4 @@
 # CYO
-Amazon Musical Instrument Reviews
+Pokemon Battle Analysis
 
-Includes dataset, R script, Rmd file, and PDF.
+Includes datasets, R script, Rmd file, and PDF.
