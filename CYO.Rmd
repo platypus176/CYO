@@ -1,0 +1,851 @@
+---
+title: "Predicting the Winning Pokemon"
+author: "Dale Chen-Song"
+date: "30/06/2020"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+if(!require(knitr)) install.packages("knitr")
+if(!require(tinytex)) install.packages("tinytex")
+# Install packages if necessary, and load them
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(stringr)) install.packages("stringr")
+if(!require(ggcorrplot)) install.packages("ggcorrplot")
+if(!require(rpart)) install.packages("rpart")
+if(!require(rpart.plot)) install.packages("rpart.plot")
+if(!require(randomForest)) install.packages("randomForest")
+knitr::opts_chunk$set(echo = TRUE)
+```
+![Pokemon](images/pokemon.png)
+
+# 1. Introduction
+
+Pokemon, developed by GameFreak and published by Nintendo, is a global phenomenon that has spanned for almost 25 years starting in 1996, starting with video games and expanding to TV series, card games, toys and so on. There are more than 30 core games in the franchise with even more spin-off games. Pokemon boasts the second best-selling video game franchise and the largest media franchise. With a new Pokemon game released in November 15, 2019, there are now almost 900 different Pokemon, not including different forms.  
+
+The main goal of Pokemon is to capture these monsters and use them in battle to fight against other people and their Pokemon. However, in core game Pokemon, there is a surprisingly complex combat system. There are many [** combat mechanics**](https://bulbapedia.bulbagarden.net/wiki/Statistic) involved, such as team composition, moves, items, abilities, type weakness, and so on, that all this can confuse those who want to start competitive Pokemon battling. Where do we start? In this report, we'll focus simply on the Pokemon and not other combat mechanics. Which Pokemon wins the most fights? Since there are so many Pokemon, we want to narrow down which Pokemon we want to use, since we can only have 6 Pokemon on a team. Can we determine the winner of a battle, just by looking at a Pokemon stats? We'll employ machine learning to help us predict which Pokemon in the battle will ultimately become the victor. 
+
+(Note: anything that is bold is a link for more information)
+
+# 2. Dataset Summary
+
+We obtain our datasets from [**Kaggle**](https://www.kaggle.com/terminus7/pokemon-challenge); Pokemon- Weedle's Cave.
+
+```{r data_set, echo = TRUE}
+# Obtain Dataset
+# Link: https://www.kaggle.com/terminus7/pokemon-challenge
+
+# Download and create database
+pokemon <- fread("pokemon.csv")
+combat <-fread("combat.csv")
+test <-fread("tests.csv")
+
+# Tidy data
+names(pokemon)[1] <- "Number"
+```
+
+There are three datasets. First one contains all the information on each Pokemon. The second contains simulated Pokemon combat with ID of pokemon and winner. The third contains test combats to predict on.  
+
+## 2.1 Pokemon Dataset
+
+The first dataset, pokemon, contains 800 Pokemon (which include different forms) with all their characteristics.  
+This dataset has 12 categories:  
+
+  Number: Pokemon ID numbered by order by National Pokedex.  
+  Name: Name of the Pokemon.  
+  Type 1: Elemental Property of a Pokemon.  
+  Type 2: Second Elemental Property of a Pokemon.  
+  
+The next 6 categories define the stats of the Pokemon.  
+  HP(Hit Point): How much damage a Pokemon can receive before fainting.  
+  Attack: How much damage a Pokemon deals with a physical move.  
+  Defense: How much damage a Pokemon receives when it is hit with a physical move.  
+  Sp. Atk (Special Attack): How much damage a Pokemon deals with a special move.  
+  Sp. Def (Special Defense): How much damage a Pokemon receives when it is hit with a special move.  
+  Speed: Determines order of Pokemon that can act in battle.  
+  
+The next 2 categories define a grouping for the Pokemon.  
+  [**Generation**](https://bulbapedia.bulbagarden.net/wiki/Generation): Grouping for pokemon based on when they are released. Normally when a new generation occurs when a new set of core games are introduced.  
+  [**Legendary**](https://bulbapedia.bulbagarden.net/wiki/Legendary_Pok%C3%A9mon): Grouping for incredibly rare and often very powerful Pokemon.  
+
+```{r head, echo = TRUE}
+# Data Observation
+head(pokemon)
+dim(pokemon)
+```
+
+### Pokemon Groupings
+
+#### Mega Evolution:  
+
+Wait, what's with the [**Mega**](https://bulbapedia.bulbagarden.net/wiki/Mega_Evolution) in front of Mega Venasaur? Is this a different Pokemon compared to Venasaur? Actually, it turns out Mega in front of a Pokemon name means that it is a Mega Evolution of a Pokemon, which, in general, is a more powerful form of the base Pokemon. What makes them special? You need to have a certain item to transform these Pokemon into their Mega Evolution and you can only have one Mega Pokemon in a team. I have added [**Primal Pokemon**](https://bulbapedia.bulbagarden.net/wiki/Primal_Reversion) within this list, because they behave almost like Mega Pokemon, however there is no limitations on how many Primal Pokemon you can have. 
+
+```{r mega, echo = TRUE}
+# Mega
+mega <- pokemon %>% filter(str_detect(Name, "Mega ")==TRUE | str_detect(Name, "Primal")==TRUE)
+head(mega)
+mega %>% count() %>% pull()
+```
+
+A closer analysis of this data shows that there are 50 different Mega Pokemon.
+
+#### Legendary:  
+
+Let's look at another grouping of Pokemon, [**Legendary**](https://bulbapedia.bulbagarden.net/wiki/Legendary_Pok%C3%A9mon). These are considered to be a more powerful and rare Pokemon in the Pokemon world.
+
+```{r legendary, echo = TRUE}
+# Legendary
+legendary <- pokemon %>% filter(Legendary == TRUE)
+head(legendary)
+legendary %>% count() %>% pull()
+```
+
+We see that there are 65 Legendary Pokemon. 
+
+#### Mega Legendary:  
+
+If we take a closer look at Legendary group, we can see that there are Mega (and Primal) in front of some of these names!
+
+```{r mega_legendary, echo = TRUE}
+# Mega Legendary
+mega_legendary <- mega %>% filter(Legendary==TRUE)
+head(mega_legendary)
+mega_legendary %>% count() %>% pull()
+```
+
+If Mega versions of more powerful version of the base Pokemon, then this would imply that these 8 Mega Legendary Pokemon are stronger versions than their respective Legendary Pokemon, which are already powerful and rare Pokemon. Maybe we should take note of these Pokemon.
+
+#### Others:   
+
+There are Pokemon that appear more than once in this list, such as Rotom and Mega Pokemon. Such Pokemon are considered to have [**different forms**](https://bulbapedia.bulbagarden.net/wiki/List_of_Pok%C3%A9mon_with_form_differences). They are distinct enough that they could be considered different Pokemon in combat. However, the only issue is that some competitive Pokemon battles only allow one Pokemon of the same name, to prevent people from having the same Pokemon dominate in a battle. Without these different forms, we have a total of 721 unique Pokemon. We'll take a note of this, however this shouldn't affect us.
+
+```{r same, echo = TRUE}
+# Rotom
+pokemon[grep("Rotom", Name), ]
+```
+
+There is another group of Pokemon called [**Mythical**](https://bulbapedia.bulbagarden.net/wiki/Mythical_Pok%C3%A9mon), which are considered even more rare than Legendary Pokemon (though not necessarily more powerful). Prior to Generation 5, there was no distinction between Legendary and Mythical Pokemon. Some Legendary Pokemon in this dataset are incorrectly labelled as Legendary when they should be Mythical, and some Mythical aren't labelled at all. I'll leave the pokemon database like this for now, but will consider about this point later on, if necessary.
+
+### Pokemon Types
+
+```{r type_amount, echo = TRUE}
+# Number of Types
+n_distinct(pokemon$`Type 1`)
+```
+
+There are 18 different Pokemon [**types**](https://bulbapedia.bulbagarden.net/wiki/Type). Each type has its own strength and weakness (even immunity) against other types. An example is that a Fire type is super-effective against a Grass type, however a Fire type is not very effective against a Water type. I have included a Type Chart reference down below. 
+
+![Pokemon Type Chart](images/typechart.png)
+
+We can also see that certain Pokemon have one type, like Squirtle, simply being a Water type Pokemon, while others have two types, like Bulbasaur, a Grass/Poison Pokemon (the order of two types do not matter). Within the 800 Pokemon, there are 386 having a single type.
+
+```{r single_type, echo = TRUE}
+# Amount of Pokemon with only one Types
+pokemon %>% group_by(`Type 2`) %>% filter(str_detect(`Type 2`, "") == FALSE) %>%
+  summarize(tot=n())%>% pull()
+```
+
+When Pokemon have two types, they combine the weaknesses and strengths of those types together. For example, if the opposing Pokemon is Water/Grass, the Fire type does neutral damage, since the super-effective against cancels out with the not very effective. This is pretty complicated and may not make immediate sense to those unfamiliar to Pokemon, however this creates a more diverse battle system where a user will try to match up their Pokemon against an opponent in which the user has the type advantage.
+I have provided a link to a [**dual-type chart**](https://pokemondb.net/type/dual) for those who are interested, however we won't delve too deep into dual types here.
+
+#### Type Distribution:  
+So let's see how many Pokemon there are for each type, maybe we can figure out a strategy to use to counter the more dominant types. I decided to merge the two Type lists together, since it doesn't quite matter whether they are the primary or secondary types of a Pokemon and  the weaknesses and strengths are combined when they are dual type Pokemon. 
+
+```{r type, echo = TRUE}
+# Type Distribution
+# Type 1 total
+type_1<-pokemon %>% group_by(`Type 1`) %>% summarize(Total_1=n())
+names(type_1)[1]<- "Type"
+# Type 2 total
+type_2<-pokemon %>% group_by(`Type 2`) %>% 
+  filter(str_detect(`Type 2`, "") == TRUE) %>%summarize(Total_2=n())
+names(type_2)[1]<- "Type"
+# Join type together
+type<-inner_join(type_1,type_2)
+type$Total<- type$Total_1+type$Total_2
+type <- type %>% arrange(desc(Total))
+
+# Graph for Pokemon Type Distribution
+par(las =2)
+barplot(type$Total, names.arg = type$Type, main="Pokemon Type Distribution", cex.names= 0.8, horiz=TRUE)
+```
+
+We can see that the 3 most abundant types are Water, Normal and Flying. So, from this observation, we should consider Pokemon that are strong against these abundant types. From the chart above, we can see that the weakness for Water is Electric and Grass. For Normal, it's only Fighting. Finally, for Flying, the weaknesses are Ice, Rock and Electric. We can see that maybe being an Electric type is an advantage. 
+
+The 3 least abundant types are Ice, Fairy, and Ghosts. This actually makes sense for Fairy types, since they were newly introduced much later during Generation 6 (the newest Generation), as GameFreak wanted to try and counter Dragon types for being too powerful. Therefore, as a newly introduced type, there would be less Pokemon being Fairy type. 
+
+
+#### Legendary Type Distribution  
+We can observe the distribution of Types within the group for Legendary.
+
+```{r legendary_type, echo = TRUE}
+# Legendary Type Distribution
+# Type 1 total
+leg_type_1<-legendary %>% group_by(`Type 1`) %>% summarize(Total_1=n())
+names(leg_type_1)[1]<- "Type"
+
+# Type 2 total
+leg_type_2<-legendary %>% group_by(`Type 2`) %>% 
+  filter(str_detect(`Type 2`, "") == TRUE) %>%summarize(Total_2=n())
+names(leg_type_2)[1]<- "Type"
+
+# Join type together
+leg_type<-full_join(leg_type_1, leg_type_2)
+leg_type<- leg_type %>% add_row(Type = "Bug")
+leg_type<- leg_type %>% add_row(Type = "Poison")
+leg_type[is.na(leg_type)]<-0
+leg_type$Total<- leg_type$Total_1+leg_type$Total_2
+leg_type <- leg_type %>% arrange(desc(Total))
+
+# Graph for Legendary Type Distribution
+par(las =2)
+barplot(leg_type$Total, names.arg = leg_type$Type, main="Legendary Type Distribution", cex.names= 0.8, horiz=TRUE)
+```
+
+Within the Legendary group, there 3 most abundant types are Psychic, Dragon, and Flying. Thus to counter these powerful Pokemon, we can consider Pokemon strong against these types. Bug, Dark, Ghost against Psychic. Dragon, Ice, and Fairy against Dragon. Ice, Rock, and Electric for Flying.
+
+Turns out that there are no Poison nor Bug type Legendary Pokemon! 
+
+### Pokemon Stats
+
+Let's take a look at the Pokemon Stats. We should probably take note of the Pokemon with the highest Stats, since this seems to be how a Pokemon can win in a battle.
+
+#### BST:  
+One common method to immediately know the power of a Pokemon is to look at their Base Stat Total (BST). This is just all of the Pokemon Stats added up together. I have added a BST column in the Pokemon dataset, so we can more easily work with the BST. 
+
+```{r BST, echo = TRUE}
+# Base Stat Total (BST)
+pokemon$BST<- pokemon$HP + pokemon$Attack + pokemon$Defense + 
+  pokemon$`Sp. Atk` + pokemon$`Sp. Def` + pokemon$Speed
+head(pokemon)
+```
+
+We can see immediately that Bulbasaur has lower BST than Ivysaur. Ivysaur has lower BST than Venasaur. Finally, Venasaur has lower BST than Mega Evolution. This makes sense as these Bulbasaur evolves into Ivysaur, which evolves into Venasaur, which then Mega evolves into Mega Venasaur. [Evolution](https://bulbapedia.bulbagarden.net/wiki/Evolution) in Pokemon is the process for when a Pokemon changes into a different and more powerful species of Pokemon with increased Stats and some even change types. So, in general, fully evolved Pokemon have an edge against those that aren't fully evolved.
+
+(Only one Pokemon's evolution line doesn't have increased Stats, and that is Scyther to Scizor, where the BST for both is 500, but the Stats are rearranged)
+
+```{r scyther, echo = TRUE}
+# Scyther and Scizor
+pokemon[c(133,229),]
+```
+
+From Mega Venasaur BST, we can observe that Mega pokemon have higher BST than their base counterpart. This is the case with all Mega Pokemon (except for Alakazam) as they have 100 more BST than their base counterpart, showing that they should be more powerful.
+
+```{r megaBST, echo = TRUE}
+# Mega BST
+mega$BST<- mega$HP + mega$Attack + mega$Defense + 
+  mega$`Sp. Atk` + mega$`Sp. Def` + mega$Speed
+# Getting rid of duplicate Mega Evolution (Charizard and Mewtwo have 2 Mega Evolution)
+nonmega<-mega[-c(3,15),]
+# Obtain base form
+nonmega<-nonmega$Number-1
+nonmega<-pokemon %>% filter(pokemon$Number %in% nonmega)
+# Join both 
+bothmega<-full_join(nonmega,mega) %>% arrange(Number) %>% select(Number, Name, BST)
+head(bothmega)
+```
+
+The top BST of all Pokemon are shown below.
+
+```{r highestBST, echo = TRUE}
+# Highest BST
+BST<-pokemon %>% select(Number, Name, BST, Legendary) %>% arrange(desc(BST))
+head(BST)
+hist(pokemon$BST, main = "BST distribution", xlab = "BST")
+```
+
+The top 5 are all Pokemon that are Mega Legendary Pokemon, a group that we identified earlier above. This makes sense as Legendary Pokemon are already powerful, and Mega evolution increases their BST by 100, making them even more powerful. The 6th Pokemon is Arceus, which is considered to be a god in the Pokemon World and was considered the most powerful Pokemon before Mega Evolution became a thing.
+
+Surprisingly, the BST distribution is Bimodal. There are a bunch of Pokemon with low BST total.
+
+Alright, let's take a closer look at the BST summary of several groups of Pokemon.
+
+```{r BST_summary, echo = TRUE}
+# BST summary of all Pokemon
+pokemon %>% select(BST) %>% summary(pokemon)
+# BST summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(BST) %>% summary(BST)
+# BST summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(BST) %>% summary(BST)
+# BST summary of Mega
+mega %>% select(BST) %>% summary(BST)
+```
+
+We can see that Legendary Pokemon have a higher average BST, meaning they are, on average,  more powerful than a normal Pokemon. Mega Pokemon have a slightly lower average BST than Legendary, but Mega are still significantly more powerful than a normal Pokemon.
+
+(Note: I have decided to leave out Mega Legendary out when looking at the summaries, because they are a very small group that are skewed to be powerful, and won't give us more insight that can be provided by Mega and Legendary groups.)
+
+Next, we'll take a look at the distribution of each stats individually.
+
+
+#### HP:  
+The HP stat is used to determine how much damage a Pokemon can receive before fainting.
+
+```{r hp, echo = TRUE}
+# HP 
+hp<-pokemon %>% select(Number, Name, HP, Legendary) %>% arrange(desc(HP))
+head(hp)
+hist(pokemon$HP, main = "HP distribution", xlab = "HP")
+```
+
+Blissey and Chansey has such a high HP stat with 255 and 250 respectively, that it blows away the next Pokemon in Competition, Wobbuffet! However, surprisingly none of the top 6 for HP are Legendary Pokemon! 
+
+The distribution for the HP is skewed to the right, with a lot of outliers on the right.
+
+```{r HP_summary, echo = TRUE}
+# HP summary of all Pokemon
+pokemon %>% select(HP) %>% summary(pokemon)
+# HP summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(HP) %>% summary(HP)
+# HP summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(HP) %>% summary(HP)
+# HP summary of Mega
+mega %>% select(HP) %>% summary(HP)
+```
+
+Legendary (and Mega) Pokemon still have a higher average HP than normal Pokemon, however the Max HP of a Legendary and Mega are significantly lower than the HP of Blissey. 
+
+```{r topHP, echo= TRUE}
+# Highest HP for Legendary and Mega
+legendary %>% filter(HP == max(HP)) %>% select(Number, Name, HP, Legendary)
+mega %>% filter(HP == max(HP)) %>% select(Number, Name, HP, Legendary)
+```
+
+The highest HP stat for a Legendary goes towards both forms of Giratina with 150, while the highest HP stat for a Mega goes towards Mega Garchomp wiht 108.
+
+
+#### Attack:  
+The Attack stat determines how much damage a Pokemon deals with a physical move.
+
+```{r attack, echo = TRUE}
+# Attack
+atk<-pokemon %>% select(Number, Name, Attack, Legendary) %>% arrange(desc(Attack))
+head(atk)
+hist(pokemon$Attack, main = "Attack distribution", xlab = "Attack")
+```
+
+The top 6 Pokemon for Attack are all either Mega Pokemon and/or Legendary Pokemon, with the highest being a Mega Legendary, Mega Mewtwo X with 190.
+
+The distribution for Attack is skewed to the right.
+
+```{r topAtk, echo= TRUE}
+# Highest ATtack for a normal Pokemon
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  filter(Attack == max(Attack)) %>% select(Number, Name, Attack, Legendary)
+```
+
+The highest Attack stat for a normal Pokemon is Rampardos with 165. 
+
+```{r atk_summary, echo = TRUE}
+# Attack summary of all Pokemon
+pokemon %>% select(Attack) %>% summary(pokemon)
+# Attack summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(Attack) %>% summary(Attack)
+# Attack summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(Attack) %>% summary(Attack)
+# Attack summary of Mega
+mega %>% select(Attack) %>% summary(Attack)
+```
+
+Both Mega and Legendary have a higher average Attack than normal Pokemon, while Mega Pokemon have a higher average Attack than Legendary.
+
+
+#### Defense:  
+The Defense stat determines how much damage a Pokemon receives when it is hit with a physical move (based off of the opponent's Attack stat).
+
+```{r defense, echo = TRUE}
+# Defense
+defense<-pokemon %>% select(Number, Name, Defense, Legendary) %>% arrange(desc(Defense))
+head(defense)
+hist(pokemon$Defense, main = "Defense distribution", xlab = "Defense")
+```
+
+The Pokemon with the top Defense are Mega Steelix, Mega Aggron and Shuckle, with a whopping 230, while the Legendary with the highest Defense Stat is Regirock with 200.
+
+The distribution for Defense is skewed to the right, with many outliers.
+
+```{r def_summary, echo = TRUE}
+# Defense summary of all Pokemon
+pokemon %>% select(Defense) %>% summary(pokemon)
+# Defense summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(Defense) %>% summary(Defense)
+# Defense summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(Defense) %>% summary(Defense)
+# Defense summary of Mega
+mega %>% select(Defense) %>% summary(Defense)
+```
+
+Both Mega and Legendary have a higher average Defense than normal Pokemon, while Mega Pokemon have a higher average Defense than Legendary, similar to the distribution of Attack stat.
+
+
+#### Sp. Atk:  
+The Special Attack stat determines how much damage a Pokemon deals with a special move. 
+
+```{r spatk, echo = TRUE}
+# Special Attack
+satk<-pokemon %>% select(Number, Name, `Sp. Atk`, Legendary) %>% arrange(desc(`Sp. Atk`))
+head(satk)
+hist(pokemon$`Sp. Atk`, main = "Sp. Atk distribution", xlab = "Sp. Atk")
+```
+
+The Pokemon with the top Sp. Atk is Mega Mewtwo Y with a stat of 194.
+
+The distribution for Sp. atk is skewed to the right.
+
+```{r satk_summary, echo = TRUE}
+# Sp. Atk summary of all Pokemon
+pokemon %>% select(`Sp. Atk`) %>% summary(pokemon)
+# Sp. Atk summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(`Sp. Atk`) %>% summary(`Sp. Atk`)
+# Sp. Atk summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(`Sp. Atk`) %>% summary(`Sp. Atk`)
+# Sp. Atk summary of Mega
+mega %>% select(`Sp. Atk`) %>% summary(`Sp. Atk`)
+```
+
+Legendary Pokemon have a slightly higher average Sp. Atk stat than Mega Pokemon, while both of these groups have a much higher average than normal Pokemon.
+
+
+#### Sp. Def:  
+
+The Special Defense stat determines how much damage a Pokemon deals with a special move, based upon the opponent's Sp. Atk stat.
+
+```{r spdef, echo = TRUE}
+# Special Defense
+sdef<-pokemon %>% select(Number, Name, `Sp. Def`, Legendary) %>% arrange(desc(`Sp. Def`))
+head(sdef)
+hist(pokemon$`Sp. Def`, main = "Sp. Def distribution", xlab = "Sp. Def")
+```
+
+The Pokemon with the highest Sp. Def stat is Shuckle with 230! It's surprising to see a normal Pokemon with two of the highest stats! Let's take note of Shuckle. 
+
+The Legendary with the highest Sp. Def stat is Regice with a stat of 200, while the Mega Pokemon with the highest Sp. Def stat is Primal Kyogre with 160.
+The distribution is skewed to the right, with only a few outliers to the right.
+
+```{r sdef_summary, echo = TRUE}
+# Sp. Def summary of all Pokemon
+pokemon %>% select(`Sp. Def`) %>% summary(pokemon)
+# Sp. Def summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(`Sp. Def`) %>% summary(`Sp. Def`)
+# Sp. Def summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(`Sp. Def`) %>% summary(`Sp. Def`)
+# Sp. Def summary of Mega
+mega %>% select(`Sp. Def`) %>% summary(`Sp. Def`)
+```
+
+Legendary Pokemon have a slightly higher average Sp. Def stat than Mega, while both of these groups have a much higher average than normal Pokemon.
+
+
+#### Speed:  
+
+The Speed stat determines the order of Pokemon that can act in battle. In general, the Pokemon with the higher Speed stat will attack first.
+
+```{ r speed, echo = TRUE}
+# Speed
+speed<- pokemon %>% select(Number, Name, Speed, Legendary) %>% arrange(desc(Speed))
+head(speed)
+hist(pokemon$Speed, main = "Speed distribution", xlab = "Speed")
+```
+
+The Pokemon with the highest Speed is a Legendary Pokemon, Deoxys (Speed Forme), with a stat of 180. 
+
+Ninjask, a normal Pokemon, comes after with a stat of 160. The Mega Pokemon with the highest speed is Mega Alakazam and Mega Aerodactyl with 150.
+The distribution for Speed is skewed to the right.
+
+```{r speed_summary, echo = TRUE}
+# Speed summary of all Pokemon
+pokemon %>% select(Speed) %>% summary(pokemon)
+# Speed summary of non Legendary and Mega
+pokemon %>% filter(str_detect(Name, "Mega ")==FALSE& str_detect(Name, "Primal")==FALSE & Legendary == FALSE) %>% 
+  select(Speed) %>% summary(Speed)
+# Speed summary of Legendary
+pokemon %>% filter(Legendary== TRUE) %>% select(Speed) %>% summary(Speed)
+# Speed summary of Mega
+mega %>% select(Speed) %>% summary(Speed)
+```
+
+
+#### Others:
+
+We can see something weird if we just look at the lowest stats of all the Pokemon. 
+
+```{r low_stat, echo = TRUE}
+# Lowest Stat
+min <- pokemon %>%  select(HP, Attack, Defense, `Sp. Atk`, `Sp. Def`, Speed)
+apply(min,2,min)
+```
+
+There is a Pokemon with only 1 HP stat, which is strange, as the minimum stat for all the other stats is 5.
+
+```{r oneHP, echo = TRUE}
+# One HP Pokemon
+pokemon %>% filter(HP==1)
+```
+
+Turns out the 1 HP Pokemon is Shedinja. Seems really weak, huh? Turns out this Pokemon has an ability called [**Wonder Guard**](https://www.serebii.net/abilitydex/wonderguard.shtml) that makes this Pokemon immune to moves that aren't super effective against it, meaning only certain moves will affect this Pokemon. However, due to the limitations we've set up earlier, this Pokemon probably won't be able to win many battles. 
+
+## 2.2 Combat Dataset
+
+The combat dataset contains 50000 randomly generated battles with 3 columns. This dataset uses the ID of the Pokemon to denote the Pokemon. The first column shows the first Pokemon (who always goes first in battle), the second column shows the second Pokemon in the battle, and finally, the third column shows the winner of the battle. 
+
+```{r combat, echo = TRUE}
+# Combat dataset
+head(combat)
+dim(combat)
+```
+
+### Win Rate
+Let's see which Pokemon have the highest win rate. First, we'll obtain the number of matches each Pokemon has fought.
+
+```{r numberWins, echo = TRUE}
+# Number of Wins 
+numberWins <- combat %>% group_by(Winner) %>% count()
+head(numberWins)
+dim(numberWins)
+```
+
+We can see from the dimensions of the numberWins, that not all 800 Pokemon has fought, as there are only 783 Pokemon accounted for.
+
+```{r noBattle, echo = TRUE}
+# Finding which Pokemon hasn't fought
+anti_join(pokemon, numberWins, by = c("Number"="Winner"))
+```
+
+Even though there are Pokemon that haven't fought, we will be able to predict their win percentages with machine learning.
+
+Going further, not all Pokemon fought the same number of battles, therefore, we need to normalize by the number of battles fought.
+
+```{r normalize, echo = TRUE}
+# normalize first pokemon
+firstCount <- combat %>% group_by(First_pokemon) %>% count()
+head(firstCount)
+dim(firstCount)
+
+# normalize second pokemon
+secondCount <- combat %>% group_by(Second_pokemon) %>% count()
+head(secondCount)
+dim(secondCount)
+```
+
+There seems to be something wrong. Looking at the firstCount and secondCount, they all have 784 Pokemon, however numberWins shows that there are 783 Pokemon. This seems to imply that one Pokemon just couldn't win no matter what. Let's find out which Pokemon this is.
+
+```{r neverwon, echo = TRUE}
+# Finding the Pokemon that couldn't win
+neverWon <- firstCount$First_pokemon[!firstCount$First_pokemon %in% numberWins$Winner]
+pokemon[pokemon$Number == neverWon,]
+```
+
+Aw, poor Shuckle. We saw that Shuckle had the highest Defenses of any Pokemon. However, this doesn't seem to translate to Shuckle winning. We can see that Shuckle's other stats are abysmal. Perhaps this has something to do with Shuckle not being able to win.
+Either way, we need to add Shuckle into the dataset, even though it has never won.
+
+```{r addingShuckle, echo = TRUE}
+# Adding Shuckle to dataset
+numberWins <- rbind(numberWins, c(Winner= 231, n =0))
+numberWins <- numberWins[order(numberWins$Winner),]
+```
+
+After adding Shuckle, we can now calculate the win percentage of each Pokemon.
+
+```{r win_percentage, echo = TRUE}
+# Obtain total battles for each pokemon
+numberWins$Total_Battles <- firstCount$n + secondCount$n
+# Win percentage
+numberWins$Win_Percentage <- numberWins$n/numberWins$Total_Battles
+head(numberWins)
+```
+
+Let's see the Pokemon with the highest win rate.
+
+```{r highest_win_rate, echo = TRUE}
+# Finding highest win rate Pokemon
+pokemon<-full_join(pokemon, numberWins, by = c("Number" = "Winner"))
+pokemon <- pokemon %>% rename(Wins = n)
+top_winner<-pokemon %>% group_by(Win_Percentage) %>% select(-`Type 1`, -`Type 2`, -Generation, - Wins, -Total_Battles) %>%
+  arrange(desc(Win_Percentage))
+head(top_winner)
+```
+
+We can see that there are more Mega Pokemon within highest win rate Pokemon than Legendary Pokemon and surprisingly there is a normal Pokemon that have higher win rate than a Legendary!
+
+Let's take a look at the Pokemon with the lowest win rate now.
+
+```{r lower_win_rate, echo = TRUE}
+# Finding lowest win rate Pokemon
+top_loser <-top_winner %>% arrange(Win_Percentage)
+head(top_loser)
+```
+
+Wow, there is such a disparity between the stats of the highest win rate Pokemon and the lowest win rate Pokemon. At a glance, the most disparing of these Pokemon's stats are the Attack and Speed stats. This may suggest that the Attack and Speed stats are important to determine the winning Pokemon in a battle. We can suggest that maybe those that can attack hard first, will have the advantage since they may be able to win the battle faster than the opposing Pokemon.
+
+### Win Rate by Type:
+
+```{r type_win_rate, echo = TRUE}
+# Average Win Percentage by Type 1
+type_win_rate_1 <- drop_na(pokemon)
+type_win_rate_1 <- aggregate(type_win_rate_1$Win_Percentage, by=list(type_win_rate_1$`Type 1`), FUN = mean)
+type_win_rate_1 <- type_win_rate_1 %>% rename(Type = Group.1, Win_Percentage_1 = x) %>% arrange(desc(Win_Percentage_1))
+# Average Win Percentage by Type 2
+type_win_rate_2 <- drop_na(pokemon)
+type_win_rate_2 <- aggregate(type_win_rate_2$Win_Percentage, by=list(type_win_rate_2$`Type 2`), FUN = mean)
+type_win_rate_2 <- type_win_rate_2[-1, ]
+type_win_rate_2 <- type_win_rate_2 %>% rename(Type = Group.1, Win_Percentage_2 = x) %>% arrange(desc(Win_Percentage_2))
+# Average Win Percentage by Type
+type_win_rate <- full_join(type_win_rate_1, type_win_rate_2)
+type_win_rate <- full_join(type, type_win_rate)
+type_win_rate <- type_win_rate %>% 
+  mutate(Total_Win_Percentage = ((Win_Percentage_1 * Total_1)+(Win_Percentage_2 * Total_2))/Total) %>% 
+  select(Type, Total_Win_Percentage) %>% arrange(desc(Total_Win_Percentage)) 
+type_win_rate
+```
+
+We can see that the 3 types with the highest average Win Percentage are Flying, Dragon, and Electric and the three lowest are Rock, Fairy and Bug. Perhaps GameFreak was correct in introducing the Fairy Type as mentioned earlier, to reign in Dragon Types being too overpowered. 
+
+### Correlation by Stats:
+
+```{r correlation, echo = TRUE}
+# Correlation Table for Stats
+stats<-pokemon %>% select(-Number, -Name, -`Type 1`, - `Type 2`, -Generation, -Legendary, -Wins, -Total_Battles)
+stats<-drop_na(stats)
+stats<-signif(cor(stats),2)
+ggcorrplot(stats, lab = TRUE)
+```
+
+From the correlation table, we can see that the Win Percentage is more correlated to the Speed stat, rather than anything else. Following that is BST. A higher BST means a higher Attack stats, so we can see how that is correlated to a higher Win Percentage. Next are the two Attack stats. Lastly, the other stats aren't as correlated. Defenses doesn't matter, if you can't beat the opposing Pokemon.
+
+We can plot the Speed, BST, Attack and Sp. Atk against Win Percentage.
+
+```{r plot, echo = TRUE, message = FALSE, warning = FALSE}
+# plotting win percentage against Stat
+ggplot(pokemon, aes(x = Speed, y =  Win_Percentage)) + geom_point()+ geom_smooth()
+ggplot(pokemon, aes(x = BST, y =  Win_Percentage)) + geom_point()+ geom_smooth()
+ggplot(pokemon, aes(x = Attack, y =  Win_Percentage)) + geom_point()+ geom_smooth()
+ggplot(pokemon, aes(x = `Sp. Atk`, y =  Win_Percentage)) + geom_point()+ geom_smooth()
+```
+
+We can clearly see that Speed is much more correlated to Win Percentage. 
+
+### Win Rate by Groups:
+
+#### Legendary
+
+```{r leg_win_rate, echo =TRUE}
+# Legendary Win Rate
+leg_win_rate <- drop_na(pokemon)
+leg_win_rate <- aggregate(leg_win_rate$Win_Percentage, 
+        by=list(leg_win_rate$Legendary), FUN = mean)
+leg_win_rate
+```
+
+We can see that Legendary Pokemon have a high Win Percentage with 0.779.
+
+#### Mega
+
+```{r mega_win_rate, echo = TRUE}
+# Mega Win Rate
+mega_win_rate<- left_join(mega, pokemon)
+mega_win_rate<- drop_na(mega_win_rate)
+mega_win_rate<- sum(mega_win_rate$Wins)/sum(mega_win_rate$Total_Battles)
+mega_win_rate
+```
+
+And that Mega Pokemon have a lower but still pretty high Win Percentage of 0.721.
+
+#### Mega Legendary
+
+```{r mega_leg_win_rate, echo = TRUE}
+# Mega Legendary Win RAte
+mega_leg_win_rate<- left_join(mega_legendary, pokemon)
+mega_leg_win_rate<- drop_na(mega_leg_win_rate)
+mega_leg_win_rate<- sum(mega_leg_win_rate$Wins)/sum(mega_leg_win_rate$Total_Battles)
+mega_leg_win_rate
+```
+
+While Mega Legendary Pokemon have the highest overall Win Percentage with 0.871.
+
+# 3. Analysis/Methods
+
+To figure out winner between combats, we need to combine the two dataset to form a new one, so that the combat dataset has the information from the Pokemon dataset. Winner will be binary, so that if the First Pokemon won, it would be a 1, otherwise it'll be a 0. 
+
+```{r combine_data, echo = TRUE}
+# Combining datasets
+fight<-combat
+# Join two dataset together by Number
+fight<- fight %>% left_join(pokemon, by= c("First_pokemon" = "Number")) %>% 
+  left_join(pokemon, by = c("Second_pokemon" = "Number")) %>% select(-Name.x, -Generation.x, 
+      -Wins.x, -Total_Battles.x, -Name.y, -Generation.y, -Wins.y, -Total_Battles.y) %>% 
+  mutate(Winner_First = ifelse(Winner == First_pokemon, 1, 0))
+```
+
+## Model 1: First Pokemon
+
+Since we have concluded that Speed is an important factor for deciding the winner and as the first column dictates which Pokemon goes first, maybe we can guess that the first Pokemon normally wins. This is a simple method to obtain our predictions.
+
+```{r first_winner, echo = TRUE}
+# First Pokemon Model
+mean(fight$First_pokemon == fight$Winner)
+```
+
+Huh, only an accuracy of 0.472. That's worse than just simply guessing the winning Pokemon from the two battling, which would be 50-50. 
+If we look at the  dataset, from the first row, the first Pokemon has a lower Speed than the second Pokemon. I made an assumption that the first Pokemon to attack was equal to it having a higher speed. This isn't the case, and it seems to be random. 
+
+## Model 2: GLM
+ 
+Before working on the next model, a linear regression model, we need to partition our dataset to train and test them. We didn't need to do this in our previous model, since it was a simple formula of guessing the first Pokemon to fight. However, finding the right partition to split the dataset for test and train set is important as we may overfit the data. There are many factors that can dictate what percentage we divide the test and train set, but it may just seem arbitrary. One common method is to use 70% train, 30% test. We'll test out different percentages to see which percentage we'll use for our partitions.
+
+```{r test_partition, echo = TRUE}
+# Testing what percentage to Partition
+partition <- seq(from=.30, to =.90, by=.01)
+# Calculate accuracy for each value
+predict<- sapply(partition, function(p){
+  test_index<- createDataPartition(fight$Winner_First, times =1, p=p, list= FALSE)
+  test_set <- fight[test_index,]
+  train_set <- fight[-test_index,]
+  fit <- glm(Winner_First ~ HP.x+Attack.x+Defense.x+`Sp. Atk.x`+`Sp. Def.x`+
+    Speed.x+HP.y+Attack.y+Defense.y+`Sp. Atk.y`+`Sp. Def.y`+ Speed.y,
+    data = train_set)
+  glm_preds<-round(predict(fit, test_set))
+  mean(glm_preds==test_set$Winner_First)
+})
+
+# Plotting accuracy over percentage
+plot(partition, predict)
+partition[which.max(predict)]
+max(predict)
+```
+
+There seems to be some differences between the partition percentage and the accuracy. So, we shall use the more common percentage to partition our dataset. We will use this 70-30 split the dataset into train and test set respectively for further analysis.
+
+For our generalized linear model, we'll use just the Stats of the Pokemon.
+
+```{r test, echo = TRUE}
+# Partitioning Train and Test Set
+set.seed(1, sample.kind = "Rounding")
+test_index<-createDataPartition(fight$Winner, times = 1, p = 0.3, list = FALSE)
+test_set<- fight[test_index,]
+train_set<-fight[-test_index,]
+# GLM 
+fit <- glm(Winner_First ~ HP.x+Attack.x+Defense.x+`Sp. Atk.x`+`Sp. Def.x`+
+    Speed.x+HP.y+Attack.y+Defense.y+`Sp. Atk.y`+`Sp. Def.y`+ Speed.y,
+    data = train_set)
+glm_preds<-round(predict(fit, test_set))
+mean(glm_preds==test_set$Winner_First)
+```
+
+Alright, that's an accuracy of 0.891, not that bad. This certainly is much better than our first Model.
+
+## Model 3: Only Speed GLM
+
+From beforehand, we can see that Speed is much more closely correlated to Winning than the other Stats. We should remove the other less correlated Stats. Thus, we'll only use the Speed from both Pokemon to see if we can improve our model.
+
+```{r glm_speed, echo = TRUE}
+# GLM speed only
+speed_fit <- glm(Winner_First ~ Speed.x+Speed.y,
+           data = train_set)
+glm_speed_pred<-round(predict(speed_fit, test_set))
+mean(glm_speed_pred==test_set$Winner_First)
+```
+
+Yay, our new model gave us a higher accuracy of 0.924! We're doing better, but let's improve this further.
+
+
+## Model 4: Classification Tree
+
+So, we can see that Speed is much more important for our models. Due to this, we can simplify this slightly by getting the difference between the two Pokemon's Speed Stat. So that this diff_speed, is based on the first Pokemon. We can use a Classification Tree to make our new model this time. Classification tree is a decision tree that takes our data to go from observations about an item to conclusion about the item's target value. 
+
+```{r tree, echo = TRUE}
+# Add difference of speed
+fight <-fight %>% mutate(diff_speed = Speed.x-Speed.y)
+# Partitioning Train and Test Set
+set.seed(1, sample.kind = "Rounding")
+test_index<-createDataPartition(fight$Winner, times = 1, p = 0.3, list = FALSE)
+test_set<- fight[test_index,]
+train_set<-fight[-test_index,]
+
+# Tree
+tree<-rpart(Winner_First ~ diff_speed+Speed.x + Speed.y, data= train_set, method = 'class')
+rpart.plot(tree)
+predict_tree<- predict(tree, test_set, type = 'class')
+mean(predict_tree==test_set$Winner_First)
+```
+
+We have now a further increase in accuracy to 0.943. This tree is really simple, having only one node; we didn't need to consider each Pokemon's Speed individually. This is because the difference of that Speed stat is just that important, making it able to predict the majority of the Winners already. As long as a Pokemon is faster, it will probably win the fight. But can our model be improved even further?
+
+
+## Model 5: Random Forest
+
+Our next model to consider is Random Forest. This is also a tree model, similar to our previous model, however this time, we will use multiple decision trees with more variables to consider and outputting the classs that is mode of the classes of the individual trees. A random decision forests correct for decision tree's habit of overfitting to their training set. The more trees that we can, the more we minimize the errors.
+
+```{r random_forest, echo = TRUE}
+# Rename variables so they are easier to work with (probably should've done this earlier)
+fight<- fight %>% rename(Type1x = `Type 1.x`, Type2x =`Type 2.x`, Type1.y =`Type 1.y`, Type2.y=`Type 2.y`,
+        Sp_Atk.x = `Sp. Atk.x`, Sp_Atk.y = `Sp. Atk.y`,Sp_Def.x = `Sp. Def.x`,Sp_Def.y = `Sp. Def.y`) %>%
+  select(-First_pokemon, -Second_pokemon, - Winner, -Win_Percentage.x, -Win_Percentage.y)
+fight<-transform(fight, Winner_First = as.factor(Winner_First))
+# Recreate Partition
+set.seed(1, sample.kind = "Rounding")
+test_index<-createDataPartition(fight$Winner, times = 1, p = 0.3, list = FALSE)
+test_set<- fight[test_index,]
+train_set<-fight[-test_index,]
+# Random Forest
+rf<- randomForest(Winner_First~., data = train_set, type = "classification", ntree=500)
+rf
+#Accuracy
+predict_rf<-predict(rf,test_set)
+mean(predict_rf==test_set$Winner_First)
+```
+
+The accuracy has increased to 0.955 with our new Random Forest. However, there is a way to increase the accuracy even further, as we've just used the default for Random Forest.
+
+## Model 6. Optimized Random Forest
+
+We can improve by finding the optimal mtry, which means the number of features picked randomly to create the tree. 
+
+So let's optimize mtry.
+
+```{r mtry, echo = TRUE}
+err = double(20)
+for(mtry in 1:20){
+   rf_err=randomForest(Winner_First~., data = train_set, mtry = mtry, ntree=50)
+   err[mtry] = rf_err$err.rate[50]
+   cat(mtry," ")
+}
+plot(err, ylab= "Error", xlab= '1:mtry', type = 'l')
+```
+
+Alright, from our plot, we can see that 20 mtry is optimal to decrease the error. We'll use mtry = 20 for our optimized Random Forest model, to get the minimized error.
+
+```{r optimized_rf, echo = TRUE}
+optimized_rf<- randomForest(Winner_First~., data = train_set, mtry=20, ntree=500, type = "classification")
+optimized_rf
+pred_optimized_rf<-predict(optimized_rf, test_set)
+mean(pred_optimized_rf == test_set$Winner_First)
+```
+
+Now, our optimized Random Forest model produces an accuracy of 0.963!
+
+# 4. Results and Conclusion
+
+From our 6 models, we can see that our Optimized Random Forest produces the best accuracy of 0.963.
+To recount, our models are:  
+First Pokemon Model: 0.472.  
+GLM Model: 0.891.  
+Only Speed GLM Model: 0.924.  
+Classification Tree Model: 0.943.  
+Random Forest Model: 0.955.  
+Optimized Random Forest Model: 0.963.  
+
+We have figured out that Speed is really important to determine the winners for each Pokemon battle. However, other than Speed, we haven't really accounted for any other factors with our models, just because Speed was super important. In further works, We could figure out a way to account for Types and Legendary of each Pokemon. Another factor that we could consider is that Attack and Sp. Atk Stat separates the correlation between the both of these Stats to the win rate, as normally one Pokemon focuses on one or the other Attack Stat. If we could perhaps aggregate both Attack Stats together with the highest Attack, maybe we can see a higher correlation between these Stats and the Pokemon's Win rate. 
+
+All of this still doesn't tell us the true win rates of these Pokemon in an actual Pokemon battle, due to factors not considered in this report, such as Abilities, Moveset, EVs, Items, and more. However, that would be a lot of data with a lot more details to consider. Ultimately, this is a general way of determining the winners of a Pokemon battle and is still pretty useful to determining a good Pokemon to use to fight in a battle. 
