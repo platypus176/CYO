@@ -23,7 +23,7 @@ if(!require(rpart.plot)) install.packages("rpart.plot")
 if(!require(randomForest)) install.packages("randomForest")
 knitr::opts_chunk$set(echo = TRUE)
 ```
-![Pokemon](images/pokemon.png)
+![Pokemon](pokemon.png)
 
 # 1. Introduction
 
@@ -141,7 +141,7 @@ n_distinct(pokemon$`Type 1`)
 
 There are 18 different Pokemon [**types**](https://bulbapedia.bulbagarden.net/wiki/Type). Each type has its own strength and weakness (even immunity) against other types. An example is that a Fire type is super-effective against a Grass type, however a Fire type is not very effective against a Water type. I have included a Type Chart reference down below. 
 
-![Pokemon Type Chart](images/typechart.png)
+![Pokemon Type Chart](typechart.png)
 
 We can also see that certain Pokemon have one type, like Squirtle, simply being a Water type Pokemon, while others have two types, like Bulbasaur, a Grass/Poison Pokemon (the order of two types do not matter). Within the 800 Pokemon, there are 386 having a single type.
 
